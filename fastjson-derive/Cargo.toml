@@ -1,0 +1,12 @@
+[package]
+name = "fastjson-derive"
+version = "0.1.0"
+edition = "2021"
+description = "Derive macros for fastjson"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# No external dependencies
