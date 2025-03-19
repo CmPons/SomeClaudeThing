@@ -167,67 +167,152 @@ fn extract_enum_variants(input: &str) -> Vec<Variant> {
         if let Some(body_end) = input[body_start..].find('}') {
             let body = &input[body_start + 1..body_start + body_end];
             
-            // Split by commas to get individual variants
-            for variant_str in body.split(',') {
-                let variant_str = variant_str.trim();
-                if variant_str.is_empty() {
-                    continue;
-                }
-                
-                // Extract variant name and attributes
-                let mut rename = None;
-                let parts: Vec<&str> = variant_str.split('(').collect();
-                
-                // Get variant name
-                let name_part = parts[0].trim();
-                
-                // Check for #[fastjson(rename = "...")] attribute
-                if name_part.contains("#[fastjson") && name_part.contains("rename =") {
-                    let rename_pattern = "rename = \"";
-                    if let Some(rename_start) = name_part.find(rename_pattern) {
-                        let start_pos = rename_start + rename_pattern.len();
-                        let remaining = &name_part[start_pos..];
-                        if let Some(rename_end) = remaining.find('\"') {
-                            rename = Some(remaining[..rename_end].to_string());
+            // Process the body in chunks to handle attributes correctly
+            let mut current_chunk = String::new();
+            let mut brace_count = 0;
+            let mut paren_count = 0;
+            
+            for c in body.chars() {
+                match c {
+                    '{' => {
+                        brace_count += 1;
+                        current_chunk.push(c);
+                    },
+                    '}' => {
+                        brace_count -= 1;
+                        current_chunk.push(c);
+                    },
+                    '(' => {
+                        paren_count += 1;
+                        current_chunk.push(c);
+                    },
+                    ')' => {
+                        paren_count -= 1;
+                        current_chunk.push(c);
+                    },
+                    ',' => {
+                        if brace_count == 0 && paren_count == 0 {
+                            // Process this variant
+                            if !current_chunk.trim().is_empty() {
+                                let variant = extract_single_variant(&current_chunk);
+                                if let Some(v) = variant {
+                                    variants.push(v);
+                                }
+                            }
+                            current_chunk.clear();
+                        } else {
+                            current_chunk.push(c);
                         }
-                    }
+                    },
+                    _ => current_chunk.push(c),
                 }
-                
-                // Clean up the name
-                let name = name_part.split_whitespace().last().unwrap_or("").to_string();
-                
-                // Determine variant kind
-                let kind = if parts.len() > 1 {
-                    // It's either a tuple or struct variant
-                    if variant_str.contains('{') {
-                        // It's a struct variant
-                        let fields_str = variant_str.split('{').nth(1).unwrap_or("").split('}').next().unwrap_or("");
-                        let fields = extract_struct_fields(&format!("struct Dummy {{ {} }}", fields_str));
-                        VariantKind::Struct(fields)
-                    } else {
-                        // It's a tuple variant
-                        let tuple_str = variant_str.split('(').nth(1).unwrap_or("").split(')').next().unwrap_or("");
-                        let types: Vec<String> = tuple_str.split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                        VariantKind::Tuple(types)
-                    }
-                } else {
-                    // It's a unit variant
-                    VariantKind::Unit
-                };
-                
-                variants.push(Variant {
-                    name,
-                    rename,
-                    kind,
-                });
+            }
+            
+            // Process the last variant
+            if !current_chunk.trim().is_empty() {
+                let variant = extract_single_variant(&current_chunk);
+                if let Some(v) = variant {
+                    variants.push(v);
+                }
             }
         }
     }
     
     variants
+}
+
+fn extract_single_variant(variant_str: &str) -> Option<Variant> {
+    let variant_str = variant_str.trim();
+    if variant_str.is_empty() {
+        return None;
+    }
+    
+    // Extract attributes from the variant
+    let mut rename = None;
+    
+    // Check for attribute lines
+    let lines: Vec<&str> = variant_str.lines().collect();
+    let mut variant_def = String::new();
+    let mut in_attribute = false;
+    
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[") {
+            in_attribute = true;
+        }
+        
+        if in_attribute {
+            if trimmed.contains("fastjson") && trimmed.contains("rename") {
+                // Extract rename value
+                let rename_pattern = "rename = \"";
+                if let Some(rename_start) = trimmed.find(rename_pattern) {
+                    let start_pos = rename_start + rename_pattern.len();
+                    let remaining = &trimmed[start_pos..];
+                    if let Some(rename_end) = remaining.find('\"') {
+                        rename = Some(remaining[..rename_end].to_string());
+                    }
+                }
+            }
+            
+            if trimmed.ends_with("]") {
+                in_attribute = false;
+            }
+        } else if !trimmed.starts_with("#[") {
+            // Add non-attribute lines to the variant definition
+            variant_def.push_str(trimmed);
+            variant_def.push(' ');
+        }
+    }
+    
+    let variant_def = variant_def.trim();
+    
+    // Extract the variant name and kind
+    if variant_def.is_empty() {
+        return None;
+    }
+    
+    // Get variant name
+    let name_end = variant_def.find('(').unwrap_or_else(|| variant_def.find('{').unwrap_or(variant_def.len()));
+    let name = variant_def[..name_end].trim().to_string();
+    
+    // Determine variant kind
+    let kind = if variant_def.contains('(') && !variant_def.contains('{') {
+        // It's a tuple variant
+        let tuple_start = variant_def.find('(').unwrap_or(0);
+        let tuple_end = variant_def.rfind(')').unwrap_or(variant_def.len());
+        
+        if tuple_start < tuple_end && tuple_start > 0 {
+            let tuple_str = &variant_def[tuple_start + 1..tuple_end];
+            let types: Vec<String> = tuple_str.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            VariantKind::Tuple(types)
+        } else {
+            VariantKind::Unit
+        }
+    } else if variant_def.contains('{') {
+        // It's a struct variant
+        let fields_start = variant_def.find('{').unwrap_or(0);
+        let fields_end = variant_def.rfind('}').unwrap_or(variant_def.len());
+        
+        if fields_start < fields_end && fields_start > 0 {
+            let fields_str = &variant_def[fields_start + 1..fields_end];
+            let fields = extract_struct_fields(&format!("struct Dummy {{ {} }}", fields_str));
+            VariantKind::Struct(fields)
+        } else {
+            VariantKind::Unit
+        }
+    } else {
+        // It's a unit variant
+        VariantKind::Unit
+    };
+    
+    Some(Variant {
+        name,
+        rename,
+        kind,
+    })
 }
 
 fn generate_struct_serialize(name: &str, fields: Vec<Field>) -> TokenStream {

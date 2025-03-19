@@ -1,40 +1,60 @@
-use thiserror::Error;
 use std::fmt;
 
 /// Error that can occur during serialization or deserialization
-#[derive(Error, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
-    #[error("I/O error: {0}")]
+    /// I/O error with a message
     Io(String),
 
-    #[error("Unexpected end of input")]
+    /// Unexpected end of input
     Eof,
 
-    #[error("Invalid syntax at position {position}: {message}")]
+    /// Invalid syntax error at specific position
     Syntax {
         position: usize,
         message: String,
     },
 
-    #[error("Expected {expected} but found {found} at position {position}")]
+    /// Expected a certain token but found something else
     ExpectedFound {
         expected: &'static str,
         found: String,
         position: usize,
     },
 
-    #[error("Missing field: {0}")]
+    /// Missing required field
     MissingField(String),
 
-    #[error("Unknown field: {0}")]
+    /// Unknown field
     UnknownField(String),
 
-    #[error("Type error: {0}")]
+    /// Type error (type mismatch)
     TypeError(String),
 
-    #[error("Custom error: {0}")]
+    /// Custom error with message
     Custom(String),
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Io(msg) => write!(f, "I/O error: {}", msg),
+            Error::Eof => write!(f, "Unexpected end of input"),
+            Error::Syntax { position, message } => {
+                write!(f, "Invalid syntax at position {}: {}", position, message)
+            }
+            Error::ExpectedFound { expected, found, position } => {
+                write!(f, "Expected {} but found {} at position {}", expected, found, position)
+            }
+            Error::MissingField(field) => write!(f, "Missing field: {}", field),
+            Error::UnknownField(field) => write!(f, "Unknown field: {}", field),
+            Error::TypeError(msg) => write!(f, "Type error: {}", msg),
+            Error::Custom(msg) => write!(f, "Custom error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Result type for serialization and deserialization operations
 pub type Result<T> = std::result::Result<T, Error>;

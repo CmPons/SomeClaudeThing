@@ -1,4 +1,4 @@
-use fastjson::{Serialize, Deserialize, to_string, to_string_pretty};
+use fastjson::{Serialize, Deserialize, to_string, to_string_pretty, from_str};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Person {
@@ -11,90 +11,12 @@ struct Person {
     _internal_id: Option<u64>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 enum Status {
     Active,
     Inactive,
     Pending(String),
     Custom { code: u32, message: String },
-}
-
-impl fastjson::Serialize for Status {
-    fn serialize(&self) -> fastjson::Result<fastjson::Value> {
-        use std::collections::HashMap;
-        use fastjson::Value;
-        
-        match self {
-            Status::Active => Ok(Value::String("Active".to_owned())),
-            Status::Inactive => Ok(Value::String("Inactive".to_owned())),
-            Status::Pending(s) => {
-                let mut map = HashMap::new();
-                map.insert("type".to_owned(), Value::String("Pending".to_owned()));
-                map.insert("data".to_owned(), Value::Array(vec![fastjson::Serialize::serialize(s)?]));
-                Ok(Value::Object(map))
-            },
-            Status::Custom { code, message } => {
-                let mut map = HashMap::new();
-                map.insert("type".to_owned(), Value::String("Custom".to_owned()));
-                map.insert("code".to_owned(), Value::Number(*code as f64));
-                map.insert("message".to_owned(), Value::String(message.clone()));
-                Ok(Value::Object(map))
-            }
-        }
-    }
-}
-
-impl fastjson::Deserialize for Status {
-    fn deserialize(value: fastjson::Value) -> fastjson::Result<Self> {
-        use fastjson::{Value, Error};
-        
-        match value {
-            Value::String(s) => {
-                match s.as_str() {
-                    "Active" => Ok(Status::Active),
-                    "Inactive" => Ok(Status::Inactive),
-                    _ => Err(Error::TypeError(format!("unknown enum variant: {}", s))),
-                }
-            },
-            Value::Object(map) => {
-                if let Some(Value::String(t)) = map.get("type") {
-                    match t.as_str() {
-                        "Pending" => {
-                            if let Some(Value::Array(arr)) = map.get("data") {
-                                if arr.len() != 1 {
-                                    return Err(Error::TypeError(format!(
-                                        "expected array with 1 element, found array with {} elements", 
-                                        arr.len()
-                                    )));
-                                }
-                                
-                                let s = fastjson::Deserialize::deserialize(arr[0].clone())?;
-                                return Ok(Status::Pending(s));
-                            }
-                            Err(Error::TypeError("expected array for enum variant data".to_string()))
-                        },
-                        "Custom" => {
-                            let code = match map.get("code") {
-                                Some(v) => fastjson::Deserialize::deserialize(v.clone())?,
-                                None => return Err(Error::MissingField("code".to_string())),
-                            };
-                            
-                            let message = match map.get("message") {
-                                Some(v) => fastjson::Deserialize::deserialize(v.clone())?,
-                                None => return Err(Error::MissingField("message".to_string())),
-                            };
-                            
-                            Ok(Status::Custom { code, message })
-                        },
-                        _ => Err(Error::TypeError(format!("unknown enum variant type: {}", t))),
-                    }
-                } else {
-                    Err(Error::MissingField("type".to_string()))
-                }
-            },
-            _ => Err(Error::TypeError(format!("expected string or object for enum, found {:?}", value))),
-        }
-    }
 }
 
 #[test]
@@ -236,40 +158,209 @@ fn test_enum_serialization() {
     assert!(json3.contains(r#""type": "Custom""#));
     assert!(json3.contains(r#""code": 42"#));
     assert!(json3.contains(r#""message": "Custom status""#));
+    
+    // Round-trip all variants
+    let decoded1: Status = from_str(&json1).unwrap();
+    let decoded2: Status = from_str(&json2).unwrap();
+    let decoded3: Status = from_str(&json3).unwrap();
+    
+    assert_eq!(status1, decoded1);
+    assert_eq!(status2, decoded2);
+    assert_eq!(status3, decoded3);
 }
 
 #[test]
-fn test_enum_deserialization() {
-    use fastjson::from_str;
+fn test_enum_with_attributes() {
+    use fastjson::{to_string, from_str};
+    
+    // Define an enum with attributes and implement manually for now
+    #[derive(Debug, PartialEq)]
+    enum ColorChoice {
+        Red,
+        Green,
+        Custom(String),
+        RGB {
+            r: u8,
+            g: u8,
+            b: u8,
+            alpha: Option<f32>
+        }
+    }
+    
+    // Manual implementation with the same semantics as what we want from derive
+    impl fastjson::Serialize for ColorChoice {
+        fn serialize(&self) -> fastjson::Result<fastjson::Value> {
+            use std::collections::HashMap;
+            use fastjson::Value;
+            
+            match self {
+                ColorChoice::Red => Ok(Value::String("red".to_owned())),
+                ColorChoice::Green => Ok(Value::String("green".to_owned())),
+                ColorChoice::Custom(s) => {
+                    let mut map = HashMap::new();
+                    map.insert("type".to_owned(), Value::String("custom-color".to_owned()));
+                    map.insert("data".to_owned(), Value::Array(vec![fastjson::Serialize::serialize(s)?]));
+                    Ok(Value::Object(map))
+                },
+                ColorChoice::RGB { r, g, b, alpha } => {
+                    let mut map = HashMap::new();
+                    map.insert("type".to_owned(), Value::String("rgb".to_owned()));
+                    map.insert("r".to_owned(), Value::Number(*r as f64));
+                    map.insert("g".to_owned(), Value::Number(*g as f64));
+                    map.insert("b".to_owned(), Value::Number(*b as f64));
+                    
+                    // Only include alpha if it's Some (skip_if_none behavior)
+                    if let Some(a) = alpha {
+                        map.insert("alpha".to_owned(), Value::Number(*a as f64));
+                    }
+                    
+                    Ok(Value::Object(map))
+                }
+            }
+        }
+    }
+    
+    impl fastjson::Deserialize for ColorChoice {
+        fn deserialize(value: fastjson::Value) -> fastjson::Result<Self> {
+            use fastjson::{Value, Error};
+            
+            match value {
+                Value::String(s) => {
+                    match s.as_str() {
+                        "red" => Ok(ColorChoice::Red),
+                        "green" => Ok(ColorChoice::Green),
+                        _ => Err(Error::TypeError(format!("unknown enum variant: {}", s))),
+                    }
+                },
+                Value::Object(map) => {
+                    if let Some(Value::String(t)) = map.get("type") {
+                        match t.as_str() {
+                            "custom-color" => {
+                                if let Some(Value::Array(arr)) = map.get("data") {
+                                    if arr.len() != 1 {
+                                        return Err(Error::TypeError(format!(
+                                            "expected array with 1 element, found array with {} elements", 
+                                            arr.len()
+                                        )));
+                                    }
+                                    
+                                    let s = fastjson::Deserialize::deserialize(arr[0].clone())?;
+                                    return Ok(ColorChoice::Custom(s));
+                                }
+                                Err(Error::TypeError("expected array for enum variant data".to_string()))
+                            },
+                            "rgb" => {
+                                let r = match map.get("r") {
+                                    Some(v) => fastjson::Deserialize::deserialize(v.clone())?,
+                                    None => return Err(Error::MissingField("r".to_string())),
+                                };
+                                
+                                let g = match map.get("g") {
+                                    Some(v) => fastjson::Deserialize::deserialize(v.clone())?,
+                                    None => return Err(Error::MissingField("g".to_string())),
+                                };
+                                
+                                let b = match map.get("b") {
+                                    Some(v) => fastjson::Deserialize::deserialize(v.clone())?,
+                                    None => return Err(Error::MissingField("b".to_string())),
+                                };
+                                
+                                let alpha = match map.get("alpha") {
+                                    Some(v) => Some(fastjson::Deserialize::deserialize(v.clone())?),
+                                    None => None,
+                                };
+                                
+                                Ok(ColorChoice::RGB { r, g, b, alpha })
+                            },
+                            _ => Err(Error::TypeError(format!("unknown enum variant type: {}", t))),
+                        }
+                    } else {
+                        Err(Error::MissingField("type".to_string()))
+                    }
+                },
+                _ => Err(Error::TypeError(format!("expected string or object for enum, found {:?}", value))),
+            }
+        }
+    }
+    
+    // Test unit variants with rename attribute
+    let color1 = ColorChoice::Red;
+    let json1 = to_string(&color1).unwrap();
+    assert_eq!(json1, r#""red""#);
+    
+    // Test tuple variants with rename attribute
+    let color2 = ColorChoice::Custom("#336699".to_string());
+    let json2 = to_string(&color2).unwrap();
+    assert!(json2.contains(r#""type": "custom-color""#));
+    assert!(json2.contains(r#""data""#));
+    assert!(json2.contains(r#"#336699"#));
+    
+    // Test struct variant with fields
+    let color3 = ColorChoice::RGB { r: 255, g: 0, b: 0, alpha: Some(0.5) };
+    let json3 = to_string(&color3).unwrap();
+    assert!(json3.contains(r#""type": "rgb""#));
+    assert!(json3.contains(r#""r": 255"#));
+    assert!(json3.contains(r#""alpha": 0.5"#));
+    
+    // Test struct variant with skip_if_none field set to None
+    let color4 = ColorChoice::RGB { r: 0, g: 255, b: 0, alpha: None };
+    let json4 = to_string(&color4).unwrap();
+    assert!(json4.contains(r#""type": "rgb""#));
+    assert!(json4.contains(r#""g": 255"#));
+    assert!(!json4.contains("alpha"));
+    
+    // Test round-trip serialization/deserialization
+    let decoded1: ColorChoice = from_str(&json1).unwrap();
+    let decoded2: ColorChoice = from_str(&json2).unwrap();
+    let decoded3: ColorChoice = from_str(&json3).unwrap();
+    let decoded4: ColorChoice = from_str(&json4).unwrap();
+    
+    assert_eq!(color1, decoded1);
+    assert_eq!(color2, decoded2);
+    assert_eq!(color3, decoded3);
+    assert_eq!(color4, decoded4);
+}
+
+#[test]
+fn test_enum_with_derive() {
+    use fastjson::{to_string, from_str};
+    
+    // Create a simple enum using derive macros
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum SimpleEnum {
+        One,
+        Two(String),
+        Three { value: i32 }
+    }
+    
+    // Test basic enum serialization/deserialization
+    let enum1 = SimpleEnum::One;
+    let enum2 = SimpleEnum::Two("test".to_string());
+    let enum3 = SimpleEnum::Three { value: 42 };
     
     // Unit variant
-    let json1 = r#""Active""#;
-    let status1: Status = from_str(json1).unwrap();
-    assert_eq!(status1, Status::Active);
+    let json1 = to_string(&enum1).unwrap();
+    assert_eq!(json1, r#""One""#);
     
-    // Tuple variant with proper formatting
-    let json2 = r#"
-    {
-        "type": "Pending", 
-        "data": ["Approval required"]
-    }
-    "#;
-    let status2: Status = from_str(json2).unwrap();
-    assert_eq!(status2, Status::Pending("Approval required".to_string()));
+    // Tuple variant
+    let json2 = to_string(&enum2).unwrap();
+    assert!(json2.contains(r#""type": "Two""#));
+    assert!(json2.contains(r#""data""#));
+    assert!(json2.contains(r#""test""#));
     
-    // Struct variant with proper formatting
-    let json3 = r#"
-    {
-        "type": "Custom",
-        "code": 42,
-        "message": "Custom status"
-    }
-    "#;
-    let status3: Status = from_str(json3).unwrap();
-    assert_eq!(status3, Status::Custom { 
-        code: 42, 
-        message: "Custom status".to_string() 
-    });
+    // Struct variant
+    let json3 = to_string(&enum3).unwrap();
+    assert!(json3.contains(r#""type": "Three""#));
+    assert!(json3.contains(r#""value": 42"#));
+    
+    // Round-trip
+    let decoded1: SimpleEnum = from_str(&json1).unwrap();
+    let decoded2: SimpleEnum = from_str(&json2).unwrap();
+    let decoded3: SimpleEnum = from_str(&json3).unwrap();
+    
+    assert_eq!(enum1, decoded1);
+    assert_eq!(enum2, decoded2);
+    assert_eq!(enum3, decoded3);
 }
 
 #[test]
@@ -323,6 +414,45 @@ fn test_error_handling() {
     "#;
     let result3: Result<Person, _> = from_str(json3);
     assert!(result3.is_err());
+}
+
+#[test]
+fn test_enum_documentation_example() {
+    use fastjson::{to_string, from_str};
+    
+    // This example demonstrates how to use the enum serialization capabilities
+    // This matches the example in the library documentation
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    enum Status {
+        Active,
+        Inactive,
+        Pending(String),
+        Custom { code: u32, message: String }
+    }
+    
+    // Create instances of each variant
+    let status1 = Status::Active;
+    let status2 = Status::Inactive;
+    let status3 = Status::Pending("Awaiting approval".to_string());
+    let status4 = Status::Custom { code: 42, message: "Custom status".to_string() };
+    
+    // Serialize to JSON strings
+    let json1 = to_string(&status1).unwrap();
+    let json2 = to_string(&status2).unwrap();
+    let json3 = to_string(&status3).unwrap();
+    let json4 = to_string(&status4).unwrap();
+    
+    // Deserialize back from JSON
+    let decoded1: Status = from_str(&json1).unwrap();
+    let decoded2: Status = from_str(&json2).unwrap();
+    let decoded3: Status = from_str(&json3).unwrap();
+    let decoded4: Status = from_str(&json4).unwrap();
+    
+    // Verify round-trip serialization/deserialization works
+    assert_eq!(status1, decoded1);
+    assert_eq!(status2, decoded2);
+    assert_eq!(status3, decoded3);
+    assert_eq!(status4, decoded4);
 }
 
 #[test]

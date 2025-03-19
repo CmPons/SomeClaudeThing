@@ -1,16 +1,17 @@
-//! A lightweight JSON serialization/deserialization library with no dependencies and fast compilation
+//! A lightweight JSON serialization/deserialization library with zero dependencies and fast compilation
 //!
 //! This library provides functionality similar to Serde, but with a focus on minimizing
 //! dependencies and compilation time. It includes support for derive macros for easily
-//! serializing and deserializing Rust types.
+//! serializing and deserializing Rust types, including enums.
 //!
 //! # Features
 //!
-//! - Zero dependencies (except for the optional thiserror for error handling)
+//! - Zero dependencies - absolutely none!
 //! - Fast compilation times
 //! - Derive macros for serialization and deserialization
+//! - Full enum support (unit, tuple, and struct variants)
 //! - Detailed error messages
-//! - Support for standard Rust types
+//! - Support for all standard Rust types
 //!
 //! # Examples
 //!
@@ -21,6 +22,23 @@
 //! let data = vec![1, 2, 3, 4];
 //! let json = to_string(&data).unwrap();
 //! println!("{}", json);
+//! ```
+//!
+//! ```rust
+//! use fastjson::{Serialize, Deserialize, to_string, from_str};
+//!
+//! #[derive(Serialize, Deserialize, Debug, PartialEq)]
+//! enum Status {
+//!     Active,
+//!     Inactive,
+//!     Pending(String),
+//!     Custom { code: u32, message: String }
+//! }
+//!
+//! let status = Status::Pending("Awaiting approval".to_string());
+//! let json = to_string(&status).unwrap();
+//! let decoded: Status = from_str(&json).unwrap();
+//! assert_eq!(status, decoded);
 //! ```
 
 mod error;

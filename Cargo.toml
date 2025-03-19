@@ -2,11 +2,10 @@
 name = "fastjson"
 version = "0.1.0"
 edition = "2021"
-description = "A lightweight JSON serialization/deserialization library with fast compilation"
+description = "A lightweight JSON serialization/deserialization library with fast compilation and zero dependencies"
 license = "MIT"
 
 [dependencies]
-thiserror = "1.0"
 fastjson-derive = { path = "./fastjson-derive", version = "0.1.0" }
 
 [workspace]
