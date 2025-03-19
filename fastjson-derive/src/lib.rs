@@ -171,8 +171,17 @@ fn extract_enum_variants(input: &str) -> Vec<Variant> {
             let mut current_chunk = String::new();
             let mut brace_count = 0;
             let mut paren_count = 0;
+            let mut in_attribute = false;
             
             for c in body.chars() {
+                // Track if we're inside an attribute: #[...]
+                if c == '#' {
+                    in_attribute = true;
+                }
+                if in_attribute && c == ']' {
+                    in_attribute = false;
+                }
+                
                 match c {
                     '{' => {
                         brace_count += 1;
@@ -191,7 +200,7 @@ fn extract_enum_variants(input: &str) -> Vec<Variant> {
                         current_chunk.push(c);
                     },
                     ',' => {
-                        if brace_count == 0 && paren_count == 0 {
+                        if brace_count == 0 && paren_count == 0 && !in_attribute {
                             // Process this variant
                             if !current_chunk.trim().is_empty() {
                                 let variant = extract_single_variant(&current_chunk);
@@ -243,7 +252,7 @@ fn extract_single_variant(variant_str: &str) -> Option<Variant> {
         
         if in_attribute {
             if trimmed.contains("fastjson") && trimmed.contains("rename") {
-                // Extract rename value
+                // Extract rename value - more robust parsing
                 let rename_pattern = "rename = \"";
                 if let Some(rename_start) = trimmed.find(rename_pattern) {
                     let start_pos = rename_start + rename_pattern.len();
@@ -370,7 +379,9 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
     body.push_str("        use std::collections::HashMap;\n");
     body.push_str("        use ::fastjson::Value;\n");
     body.push_str("        \n");
-    body.push_str("        match self {\n");
+    
+    // For enums, we need to match on references
+    body.push_str("        let result = match *self {\n");
     
     // Generate serialization for each variant
     for variant in &variants {
@@ -387,7 +398,7 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
                 // Tuple variant is serialized as an object with type and data fields
                 if types.len() == 1 {
                     // Single field tuple variant
-                    body.push_str(&format!("            {}::{}(value) => {{\n", name, variant_name));
+                    body.push_str(&format!("            {}::{}(ref value) => {{\n", name, variant_name));
                     body.push_str("                let mut map = HashMap::new();\n");
                     body.push_str(&format!("                map.insert(\"type\".to_owned(), Value::String(\"{}\".to_owned()));\n", json_name));
                     body.push_str("                map.insert(\"data\".to_owned(), Value::Array(vec![::fastjson::Serialize::serialize(value)?]));\n");
@@ -395,18 +406,20 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
                     body.push_str("            },\n");
                 } else {
                     // Multi-field tuple variant
-                    let field_names: Vec<String> = (0..types.len())
-                        .map(|i| format!("value{}", i))
+                    let ref_field_names: Vec<String> = (0..types.len())
+                        .map(|i| format!("ref value{}", i))
                         .collect();
                     
-                    let pattern = field_names.join(", ");
-                    body.push_str(&format!("            {}::{}({}) => {{\n", name, variant_name, pattern));
+                    let ref_pattern = ref_field_names.join(", ");
+                    body.push_str(&format!("            {}::{}({}) => {{\n", name, variant_name, ref_pattern));
                     body.push_str("                let mut map = HashMap::new();\n");
                     body.push_str(&format!("                map.insert(\"type\".to_owned(), Value::String(\"{}\".to_owned()));\n", json_name));
                     body.push_str("                let mut data = Vec::new();\n");
                     
-                    for field_name in &field_names {
-                        body.push_str(&format!("                data.push(::fastjson::Serialize::serialize(&{})?);\n", field_name));
+                    for field_name in &ref_field_names {
+                        // Remove "ref " from the field name
+                        let clean_name = field_name.replace("ref ", "");
+                        body.push_str(&format!("                data.push(::fastjson::Serialize::serialize({})?); // No & needed as we have ref\n", clean_name));
                     }
                     
                     body.push_str("                map.insert(\"data\".to_owned(), Value::Array(data));\n");
@@ -415,13 +428,13 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
                 }
             },
             VariantKind::Struct(fields) => {
-                // Generate field patterns for destructuring
+                // Generate field patterns for destructuring with ref
                 let field_patterns: Vec<String> = fields.iter()
-                    .map(|field| field.name.clone())
+                    .map(|field| format!("ref {}", field.name))
                     .collect();
                 
-                let pattern = field_patterns.join(", ");
-                body.push_str(&format!("            {}::{}{{ {} }} => {{\n", name, variant_name, pattern));
+                let ref_pattern = field_patterns.join(", ");
+                body.push_str(&format!("            {}::{}{{ {} }} => {{\n", name, variant_name, ref_pattern));
                 body.push_str("                let mut map = HashMap::new();\n");
                 body.push_str(&format!("                map.insert(\"type\".to_owned(), Value::String(\"{}\".to_owned()));\n", json_name));
                 
@@ -435,11 +448,11 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
                     let ser_name = field.rename.clone().unwrap_or_else(|| field_name.clone());
                     
                     if field.skip_if_none && field.is_option {
-                        body.push_str(&format!("                if let Some(val) = &{} {{\n", field_name));
-                        body.push_str(&format!("                    map.insert(\"{}\".to_owned(), ::fastjson::Serialize::serialize(val)?);\n", ser_name));
+                        body.push_str(&format!("                if let Some(val) = {} {{\n", field_name));
+                        body.push_str(&format!("                    map.insert(\"{}\".to_owned(), ::fastjson::Serialize::serialize(val)?); // No & needed due to ref pattern\n", ser_name));
                         body.push_str("                }\n");
                     } else {
-                        body.push_str(&format!("                map.insert(\"{}\".to_owned(), ::fastjson::Serialize::serialize(&{})?);\n", 
+                        body.push_str(&format!("                map.insert(\"{}\".to_owned(), ::fastjson::Serialize::serialize({})?);\n", 
                             ser_name, field_name));
                     }
                 }
@@ -451,7 +464,8 @@ fn generate_enum_serialize(name: &str, variants: Vec<Variant>) -> TokenStream {
     }
     
     // Close match and implementation
-    body.push_str("        }\n");
+    body.push_str("        };\n");
+    body.push_str("        result\n");
     body.push_str("    }\n");
     body.push_str("}");
     
