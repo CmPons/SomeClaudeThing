@@ -9,4 +9,4 @@ license = "MIT"
 proc-macro = true
 
 [dependencies]
-# No external dependencies
+regex = "1.10.4"
