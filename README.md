@@ -1,3 +1,5 @@
+**I DIDN'T WRITE THIS [CLAUDE DID](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) use at your own risk**
+
 # FastJSON
 
 A lightweight JSON serialization/deserialization library with a focus on zero dependencies and fast compilation times.
